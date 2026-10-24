@@ -1,0 +1,24 @@
+[package]
+name = "swayflow"
+version = "0.4.0"
+edition = "2021"
+rust-version = "1.77"
+description = "Floating/tiling toggle, auto-placement daemon and workspace overview for Sway"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+# Overview UI (GTK 3 + wlr-layer-shell). Disable with `--no-default-features`
+# to build only `toggle` and `daemon` without any GTK development packages.
+gtk = { version = "0.18", optional = true }
+gtk-layer-shell = { version = "0.8", optional = true, features = ["v0_6"] }
+
+[features]
+default = ["overview"]
+overview = ["dep:gtk", "dep:gtk-layer-shell"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
