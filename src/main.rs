@@ -4,6 +4,8 @@
 //! ```text
 //! swayflow toggle     switch the focused workspace between tiling and auto-arranged floating
 //! swayflow overview   open (or close) the interactive workspace overview
+//!                     (colours: --accent/--background/... options, a config file or --theme gtk;
+//!                     see `swayflow overview --help`)
 //! swayflow daemon     event loop that keeps new windows of floating workspaces arranged
 //!                     (started automatically by `toggle`)
 //! ```
@@ -22,7 +24,7 @@ mod tree;
 
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: swayflow toggle | overview | daemon";
+const USAGE: &str = "usage: swayflow toggle | overview [options] | daemon\ntry `swayflow overview --help` for the overview options";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args_os()
@@ -34,6 +36,10 @@ fn main() -> ExitCode {
         Some("toggle") => commands::cmd_toggle(),
         Some("daemon") => commands::cmd_daemon(),
         Some("overview") => overview::cmd_overview(args.get(1..).unwrap_or_default()),
+        Some("-h" | "--help" | "help") => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

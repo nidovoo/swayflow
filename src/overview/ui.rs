@@ -5,8 +5,7 @@
 //! select a workspace or a window; the chosen Sway command is returned to the caller.
 //!
 //! Linking note: `libgtk-layer-shell` must come *before* `libwayland-client` in the
-//! process' library order. The Python original ensures this with a `ctypes` preload;
-//! if the overlay shows up as an ordinary window, start it with
+//! process' library order; if the overlay shows up as an ordinary window, start it with
 //! `LD_PRELOAD=/usr/lib/libgtk-layer-shell.so swayflow overview`.
 
 use std::cell::RefCell;
@@ -19,6 +18,8 @@ use gtk::prelude::*;
 use gtk::{cairo, gdk, gdk_pixbuf, gio, glib};
 use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
+use super::color::Color;
+use super::theme::{ColorSet, Palette, Role, Style};
 use super::{card_layout, quote, CardRect, OverviewData};
 use crate::error::{Error, Result};
 
@@ -39,44 +40,44 @@ const KEY_DOWN: u32 = 0xff54;
 const KEY_KP_ENTER: u32 = 0xff8d;
 const KEY_ISO_LEFT_TAB: u32 = 0xfe20;
 
-type Rgba = (f64, f64, f64, f64);
-
-/// `#rrggbb` + alpha -> cairo colour.
-fn hexa(value: u32, alpha: f64) -> Rgba {
-    (
-        f64::from((value >> 16) & 0xff) / 255.0,
-        f64::from((value >> 8) & 0xff) / 255.0,
-        f64::from(value & 0xff) / 255.0,
-        alpha,
-    )
+fn set_color(cr: &cairo::Context, c: Color) {
+    cr.set_source_rgba(c.r, c.g, c.b, c.a);
 }
 
-struct Palette {
-    dim: Rgba,
-    card: Rgba,
-    border: Rgba,
-    accent: Rgba,
-    accent_soft: Rgba,
-    win: Rgba,
-    win_float: Rgba,
-}
+/// Colours of the active GTK theme: the background, the text colour (used to
+/// derive the card/window shades) and the selection colour (the accent).
+/// Every GTK 3 theme defines these as `@define-color` names; the extra names
+/// cover libadwaita-style themes. Returns `None` if the theme offers none of them.
+fn gtk_theme_layer(window: &gtk::Window) -> Option<ColorSet> {
+    let context = window.style_context();
+    let lookup = |names: &[&str]| -> Option<Color> {
+        names
+            .iter()
+            .find_map(|name| context.lookup_color(name))
+            .map(|c| Color::rgb(c.red(), c.green(), c.blue()))
+    };
+    let background = lookup(&["theme_bg_color", "window_bg_color", "bg_color"]);
+    let foreground = lookup(&["theme_fg_color", "window_fg_color", "fg_color"]);
+    let accent = lookup(&[
+        "theme_selected_bg_color",
+        "accent_bg_color",
+        "accent_color",
+        "selected_bg_color",
+    ]);
 
-impl Palette {
-    fn new() -> Palette {
-        Palette {
-            dim: hexa(0x0b0e13, 0.80),
-            card: hexa(0x0f1217, 0.96),
-            border: hexa(0x2e3842, 1.0),
-            accent: hexa(0x88c0d0, 1.0),
-            accent_soft: hexa(0x88c0d0, 0.22),
-            win: hexa(0x1b2027, 1.0),
-            win_float: hexa(0x262c32, 1.0),
-        }
+    let mut layer = ColorSet::default();
+    if let Some(color) = background {
+        layer.set(Role::Background, color);
     }
-}
-
-fn set_color(cr: &cairo::Context, c: Rgba) {
-    cr.set_source_rgba(c.0, c.1, c.2, c.3);
+    if let Some(color) = accent {
+        layer.set(Role::Accent, color);
+    }
+    layer.derive_surfaces(foreground);
+    if layer.is_empty() {
+        None
+    } else {
+        Some(layer)
+    }
 }
 
 /// Rounded-rectangle path.
@@ -192,12 +193,12 @@ struct Overview {
 }
 
 impl Overview {
-    fn new(data: OverviewData) -> Overview {
+    fn new(data: OverviewData, palette: Palette) -> Overview {
         let aspect = data.rect.w as f64 / data.rect.h as f64;
         let sel = data.current.unwrap_or(0);
         Overview {
             data,
-            palette: Palette::new(),
+            palette,
             icons: IconProvider::new(),
             aspect,
             sel,
@@ -386,7 +387,7 @@ impl Overview {
 
 /// Shows the overlay and blocks until it is closed.
 /// Returns the Sway command to execute (`None` = just close).
-pub fn run_overview(data: OverviewData) -> Result<Option<String>> {
+pub fn run_overview(data: OverviewData, style: &Style) -> Result<Option<String>> {
     gtk::init().map_err(|e| {
         Error::runtime(format!(
             "missing dependency (gtk3, gtk-layer-shell) or no display: {e}"
@@ -444,7 +445,20 @@ pub fn run_overview(data: OverviewData) -> Result<Option<String>> {
         }
     }
 
-    let overview = Rc::new(RefCell::new(Overview::new(data)));
+    let gtk_layer = if style.use_gtk {
+        let layer = gtk_theme_layer(&window);
+        if layer.is_none() {
+            eprintln!(
+                "swayflow: the GTK theme does not define the expected colours; using the built-in palette"
+            );
+        }
+        layer
+    } else {
+        None
+    };
+    let palette = style.palette(gtk_layer.as_ref());
+
+    let overview = Rc::new(RefCell::new(Overview::new(data, palette)));
 
     let area = gtk::DrawingArea::new();
     area.add_events(gdk::EventMask::BUTTON_PRESS_MASK | gdk::EventMask::POINTER_MOTION_MASK);

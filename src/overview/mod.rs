@@ -3,7 +3,11 @@
 //!
 //! This module holds the data collection, the card layout maths and the
 //! pid-file handling; the GTK front-end lives in `ui` (feature `overview`).
+//! Colours (`color`, `theme`) are configurable through command-line options,
+//! a config file or the GTK theme and do not depend on GTK themselves.
 
+mod color;
+mod theme;
 #[cfg(feature = "overview")]
 mod ui;
 
@@ -218,26 +222,51 @@ impl Drop for PidFile {
 }
 
 #[cfg(feature = "overview")]
-fn run_ui(data: OverviewData) -> Result<Option<String>> {
-    ui::run_overview(data)
+fn run_ui(data: OverviewData, style: &theme::Style) -> Result<Option<String>> {
+    ui::run_overview(data, style)
 }
 
 #[cfg(not(feature = "overview"))]
-fn run_ui(_data: OverviewData) -> Result<Option<String>> {
+fn run_ui(_data: OverviewData, _style: &theme::Style) -> Result<Option<String>> {
     Err(crate::error::Error::runtime("built without the `overview` feature"))
 }
 
-pub fn cmd_overview(_args: &[String]) -> Result<u8> {
+/// `swayflow overview [options]` — see `theme::OVERVIEW_HELP` for the options.
+/// Returns `2` for a bad command line or an unreadable `--config` file.
+pub fn cmd_overview(args: &[String]) -> Result<u8> {
+    let options = match theme::parse_args(args) {
+        Ok(options) => options,
+        Err(message) => {
+            eprintln!("swayflow: {message}\n{}", theme::OVERVIEW_USAGE);
+            return Ok(2);
+        }
+    };
+    if options.help {
+        println!("{}", theme::OVERVIEW_HELP);
+        return Ok(0);
+    }
     if overview_running() {
         return Ok(0);
     }
+    let config = match theme::load_config(&options.config) {
+        Ok(config) => config,
+        Err(message) => {
+            eprintln!("swayflow: {message}");
+            return Ok(2);
+        }
+    };
+    for warning in &config.warnings {
+        eprintln!("swayflow: {warning}");
+    }
+    let style = theme::build_style(&options, &config);
+
     let tree = Sway::connect()?.tree()?;
     let Some(data) = collect_overview(&tree) else {
         return Ok(1);
     };
     let command = {
         let _pid_file = PidFile::create()?;
-        run_ui(data)?
+        run_ui(data, &style)?
     };
     if let Some(command) = command {
         Sway::connect()?.run(&command)?;
@@ -249,7 +278,7 @@ pub fn cmd_overview(_args: &[String]) -> Result<u8> {
 mod tests {
     use super::*;
 
-    // Expected values below were produced by the reference Python implementation (swayflow_ver4.py).
+    // Expected values below are fixed reference results.
 
     fn summarize(data: &OverviewData) -> Vec<String> {
         data.workspaces
